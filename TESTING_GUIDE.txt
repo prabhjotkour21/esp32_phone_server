@@ -1,0 +1,286 @@
+ESP32 PHONE SERVER — TESTING GUIDE
+====================================
+Step-by-step instructions for running, testing, and troubleshooting the app.
+No ESP32 hardware is required for any of the steps below.
+
+────────────────────────────────────────────────────────────────────────────────
+1. HOW TO RUN THE APP
+────────────────────────────────────────────────────────────────────────────────
+
+PREREQUISITES
+  • Flutter SDK ≥ 3.5.0 installed and on your PATH
+      Verify with:  flutter --version
+  • A physical Android or iOS device  ← strongly recommended for server testing
+      OR an Android emulator (see emulator note below)
+  • USB cable + USB debugging enabled on Android
+      Settings → Developer Options → USB Debugging → ON
+
+STEP 1 — Open a terminal and navigate to the project folder
+  cd path/to/esp32_phone_server
+
+STEP 2 — Fetch dependencies
+  flutter pub get
+
+STEP 3 — Confirm no analysis errors
+  flutter analyze
+  Expected output: "No issues found!"
+
+STEP 4 — Connect your device and verify Flutter sees it
+  flutter devices
+  Expected output: your phone listed, e.g.
+    SM-G991B (mobile) • RZ8M... • android-arm64 • Android 13
+
+STEP 5 — Run the app
+  flutter run
+  The app will build and launch on your device.
+  First build takes ~1–2 minutes; subsequent hot-reloads are instant.
+
+EMULATOR NOTE:
+  Android emulators run behind a virtual NAT. A PC on your LAN cannot
+  directly reach the emulator's IP. For Postman testing from the same machine
+  you can use the loopback address:
+    http://10.0.2.2:3000/send-text   ← from inside the emulator itself
+    http://127.0.0.1:3000/send-text  ← from the host machine if port-forwarded
+  For real ESP32 hardware, always use a physical device on the same WiFi.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2. HOW TO START THE SERVER
+────────────────────────────────────────────────────────────────────────────────
+
+Once the app is running on your device:
+
+  1. The app opens on the DASHBOARD tab automatically.
+
+  2. Look at the "Network Info" card.
+     You will see:
+       Phone IP   → e.g. 192.168.1.42
+       Port       → 3000
+       Endpoint   → POST /send-text
+     Tap the copy icon next to Phone IP to copy it to your clipboard.
+
+  3. Tap the green "Start Server" button.
+     The status indicator at the top changes from:
+       ● Stopped  (red dot)
+     to:
+       ● Running  (green dot with glow)
+
+  4. The server is now listening on port 3000 for incoming POST requests.
+
+  5. To stop the server, tap the red "Stop Server" button.
+     The status returns to Stopped and port 3000 is released.
+
+  NOTE: The server also stops automatically when the app is closed or
+  when the DashboardScreen widget is disposed.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3. HOW TO TEST THE API USING POSTMAN
+────────────────────────────────────────────────────────────────────────────────
+
+Postman is a free GUI tool for sending HTTP requests.
+Download: https://www.postman.com/downloads/
+
+SETUP (one-time)
+  1. Open Postman.
+  2. Click "New" → "HTTP Request".
+
+CONFIGURE THE REQUEST
+  Field            Value
+  ─────────────────────────────────────────────────────
+  Method           POST
+  URL              http://<PHONE_IP>:3000/send-text
+                   (replace <PHONE_IP> with the IP shown in the app,
+                    e.g. http://192.168.1.42:3000/send-text)
+  Body tab         Select "raw"
+  Body format      Select "Text" (from the dropdown next to raw)
+  Body content     Hello from Postman!
+
+IMPORTANT: Your PC and phone must be on the SAME WiFi network.
+           If your PC is on Ethernet and phone on WiFi, they may be on
+           different subnets — switch your PC to WiFi as well.
+
+SEND THE REQUEST
+  Click the blue "Send" button.
+
+
+────────────────────────────────────────────────────────────────────────────────
+4. EXAMPLE POST REQUEST
+────────────────────────────────────────────────────────────────────────────────
+
+─── Postman settings ────────────────────────────────────────────────────────
+
+  Method  : POST
+  URL     : http://192.168.1.42:3000/send-text
+  Headers : Content-Type: text/plain          ← Postman sets this automatically
+                                                 when you choose "raw → Text"
+  Body    : Sensor reading: 27.5°C
+
+─── Equivalent cURL command (run from terminal on same WiFi network) ────────
+
+  curl -X POST http://192.168.1.42:3000/send-text \
+       -H "Content-Type: text/plain" \
+       -d "Sensor reading: 27.5°C"
+
+─── Equivalent Python requests snippet ──────────────────────────────────────
+
+  import requests
+  response = requests.post(
+      "http://192.168.1.42:3000/send-text",
+      data="Sensor reading: 27.5°C",
+      headers={"Content-Type": "text/plain"},
+  )
+  print(response.status_code, response.text)  # Expected: 200 OK
+
+─── Equivalent ESP32 Arduino snippet ────────────────────────────────────────
+
+  #include <HTTPClient.h>
+
+  HTTPClient http;
+  http.begin("http://192.168.1.42:3000/send-text");
+  http.addHeader("Content-Type", "text/plain");
+  int code = http.POST("Sensor reading: 27.5");
+  Serial.println(code);   // prints 200
+  http.end();
+
+
+────────────────────────────────────────────────────────────────────────────────
+5. EXPECTED OUTPUT ON THE UI
+────────────────────────────────────────────────────────────────────────────────
+
+After a successful POST request:
+
+  ┌─ Server Status ────────────────────────────────┐
+  │  ● Running                                      │
+  └─────────────────────────────────────────────────┘
+
+  ┌─ Last Received Message ────────────────────────┐
+  │  [ESP32]  Sensor reading: 27.5°C               │
+  │           14:32:07                             │
+  └─────────────────────────────────────────────────┘
+
+  ┌─ Message Log (1) ──────────────────────────────┐
+  │  [ESP32]  Sensor reading: 27.5°C  14:32:07     │
+  └─────────────────────────────────────────────────┘
+
+  The Postman / cURL response body will show:
+    200 OK
+    Body: OK
+
+SIMULATE WITHOUT NETWORK (no Postman needed)
+  Tap "Simulate ESP32 Message" on the Dashboard.
+  A message labelled [Simulated] appears immediately — identical flow,
+  but the source badge turns orange instead of green.
+
+SENDING MULTIPLE MESSAGES
+  Each new POST request:
+    • Replaces the "Last Received Message" card with the newest message.
+    • Prepends a new row at the top of the Message Log list.
+    • The log count in the title increments: "Message Log (2)", "(3)", etc.
+
+CLEARING THE LOG
+  Tap the trash icon (🗑) in the top-right of the AppBar.
+  Both "Last Received Message" and the log are cleared.
+
+
+────────────────────────────────────────────────────────────────────────────────
+6. COMMON ERRORS AND FIXES
+────────────────────────────────────────────────────────────────────────────────
+
+ERROR 1 — "Failed to start server: SocketException: Failed to create server
+           socket (OS Error: Address already in use, errno = 98)"
+  CAUSE:  Port 3000 is already bound by another process or a previous run of
+          the app that didn't shut down cleanly.
+  FIX A:  Tap "Stop Server" first, then tap "Start Server" again.
+  FIX B:  Kill any process using port 3000:
+            macOS/Linux:  lsof -ti:3000 | xargs kill -9
+            Windows:      netstat -ano | findstr :3000
+                          taskkill /PID <PID> /F
+  FIX C:  Change the port constant in http_server_service.dart:
+            static const int port = 3001;  // or any free port
+
+ERROR 2 — Postman shows "Could not send request / Error: connect ETIMEDOUT"
+  CAUSE:  The PC and phone are not on the same network, or a firewall is
+          blocking the connection.
+  FIX A:  Confirm both devices are on the same WiFi router.
+          On PC: ipconfig (Windows) or ifconfig (macOS/Linux) — both IPs
+          should share the same subnet, e.g. 192.168.1.x
+  FIX B:  Disable the Windows Defender Firewall temporarily for testing
+          (re-enable after testing).
+  FIX C:  On Android, go to Settings → Apps → esp32_phone_server →
+          Permissions and confirm network access is allowed.
+
+ERROR 3 — App shows "Not connected to WiFi" for Phone IP
+  CAUSE:  The device has no active WiFi connection, or permissions are missing.
+  FIX A:  Connect the phone to a WiFi network and tap the refresh icon (↻).
+  FIX B:  On Android, verify AndroidManifest.xml contains:
+            <uses-permission android:name="android.permission.INTERNET"/>
+            <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
+  FIX C:  On some Android 10+ devices, location permission is required to read
+          the WiFi IP. Grant location permission if prompted.
+
+ERROR 4 — Postman receives 404 Not Found
+  CAUSE:  The URL path is incorrect.
+  FIX:    Ensure the path is exactly /send-text (case-sensitive, with hyphen):
+            CORRECT:   http://192.168.1.42:3000/send-text
+            INCORRECT: http://192.168.1.42:3000/sendtext
+            INCORRECT: http://192.168.1.42:3000/send_text
+            INCORRECT: http://192.168.1.42:3000/Send-Text
+
+ERROR 5 — Postman receives 400 Bad Request, body says "Body cannot be empty"
+  CAUSE:  The request was sent with an empty body.
+  FIX:    In Postman, make sure the "Body" tab has content in the text field
+          and that "raw" is selected (not "none").
+
+ERROR 6 — Message appears in Postman response but NOT in the app UI
+  CAUSE:  The server received the message but setState did not fire — this can
+          happen if the callback was lost after a hot reload during development.
+  FIX A:  Perform a full restart (press R in the terminal, not r).
+  FIX B:  Stop and restart the server using the app buttons.
+  FIX C:  In production builds (flutter run --release) this issue does not
+          occur — it is specific to debug hot-reload edge cases.
+
+ERROR 7 — Server stops receiving after phone screen locks
+  CAUSE:  Android battery optimisation suspends network I/O for background apps.
+  FIX A:  Keep the phone screen on while testing:
+            Settings → Developer Options → Stay Awake → ON
+  FIX B:  Disable battery optimisation for the app:
+            Settings → Battery → Battery Optimisation →
+            esp32_phone_server → Don't Optimise
+  FIX C:  For production use, implement a foreground service with a persistent
+          notification (beyond MVP scope).
+
+ERROR 8 — iOS: server does not accept connections
+  CAUSE:  iOS suspends all network listeners when the app is in the background.
+  FIX:    Keep the app in the foreground on iOS. This is an OS-level restriction
+          that cannot be bypassed without a VoIP or audio background mode.
+
+ERROR 9 — flutter analyze reports errors after editing files
+  CAUSE:  Syntax or import errors introduced during manual edits.
+  FIX:    Run flutter analyze to see the exact file and line.
+          Common culprits: missing imports, extra commas, wrong class names.
+
+ERROR 10 — "flutter: No devices found" when running flutter run
+  CAUSE:  No device connected or USB debugging not enabled.
+  FIX A:  Enable USB Debugging: Settings → Developer Options → USB Debugging.
+  FIX B:  Accept the "Allow USB Debugging" prompt that appears on the phone.
+  FIX C:  Try a different USB cable (some cables are charge-only).
+  FIX D:  Run flutter doctor to check for missing setup steps.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7. QUICK-REFERENCE CHECKLIST
+────────────────────────────────────────────────────────────────────────────────
+
+  Before every test session, verify:
+
+  [ ] Phone is connected to WiFi
+  [ ] PC / laptop is on the SAME WiFi network
+  [ ] App is open and on the Dashboard tab
+  [ ] "Start Server" has been tapped — status shows ● Running
+  [ ] Phone IP in the app matches the IP you typed into Postman
+  [ ] Postman body is set to "raw" → "Text" with non-empty content
+  [ ] URL path is exactly /send-text
+  [ ] Port is 3000
+
+  If all boxes are checked and it still fails → see ERROR 2 (firewall/subnet).
