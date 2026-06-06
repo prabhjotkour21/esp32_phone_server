@@ -2,7 +2,14 @@ import 'package:flutter/material.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/wifi_config_screen.dart';
 
-void main() {
+Future<void> main() async {
+  // Required before any plugin (SharedPreferences) is used before runApp.
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Load persisted WiFi credentials into wifiConfigNotifier so both
+  // DashboardScreen and WiFiConfigScreen start with the correct values.
+  await loadSavedWifiConfig();
+
   runApp(const Esp32PhoneServerApp());
 }
 
@@ -18,17 +25,13 @@ class Esp32PhoneServerApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      // Bottom navigation between the two screens
       home: const _AppShell(),
     );
   }
 }
 
-/// _AppShell provides a BottomNavigationBar that switches between
-/// [DashboardScreen] and [WiFiConfigScreen].
-///
-/// Using IndexedStack keeps both screens alive (preserving state) when
-/// the user switches tabs.
+/// Hosts both screens in a bottom NavigationBar with IndexedStack so state is
+/// preserved when the user switches tabs.
 class _AppShell extends StatefulWidget {
   const _AppShell();
 
