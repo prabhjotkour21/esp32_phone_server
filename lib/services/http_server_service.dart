@@ -1,19 +1,29 @@
 import 'dart:io';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import '../models/message_model.dart';
 
-/// Callback type invoked whenever a new message arrives at POST /send-text.
 typedef OnMessageReceived = void Function(MessageModel message);
 
-/// Manages the lifecycle of the local HTTP server running inside the app.
-///
-/// How it works:
-/// - [HttpServer.bind] binds to all network interfaces (0.0.0.0) on [port].
-///   This means the phone listens on every network adapter, including WiFi,
-///   so the ESP32 on the same LAN can reach it.
-/// - For every incoming [HttpRequest] we check the method and path, read the
-///   body, create a [MessageModel] and fire [onMessageReceived].
-/// - The server runs as an async loop; we keep a reference to cancel it on stop.
+// ── Terminal logger ───────────────────────────────────────────────────────────
+
+void _log(String tag, String msg) {
+  final t = DateTime.now();
+  final time =
+      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}:${t.second.toString().padLeft(2, '0')}';
+  // ignore: avoid_print
+  print('[$time] $tag $msg');
+}
+
+// ── Shared notifier ───────────────────────────────────────────────────────────
+
+/// Holds the last seen ESP32 IP address.
+/// Updated on every incoming POST so DashboardScreen can show it live
+/// via ValueListenableBuilder without any extra state-management library.
+final esp32IpNotifier = ValueNotifier<String?>( null);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 class HttpServerService {
   static const int port = 3000;
 
@@ -22,46 +32,58 @@ class HttpServerService {
 
   bool get isRunning => _isRunning;
 
-  /// Starts the HTTP server and registers the [onMessageReceived] callback.
-  /// Throws a [SocketException] if the port is already in use.
   Future<void> start(OnMessageReceived onMessageReceived) async {
     if (_isRunning) return;
 
-    // Bind to all interfaces so both WiFi and USB-tethered connections work.
     _server = await HttpServer.bind(InternetAddress.anyIPv4, port);
     _isRunning = true;
 
-    // Listen for requests without await so the UI is not blocked.
+    _log('🟢 SERVER', 'Started — listening on 0.0.0.0:$port');
+    _log('🟢 SERVER', 'ESP32 Captive Portal → Target IP   = <this phone IP>');
+    _log('🟢 SERVER', 'ESP32 Captive Portal → Target Port = $port');
+    _log('🟢 SERVER', 'Waiting for ESP32 to connect...');
+
     _server!.listen(
-      (HttpRequest request) => _handleRequest(request, onMessageReceived),
-      onError: (_) {}, // Silently ignore socket-level errors
+      (HttpRequest req) => _handleRequest(req, onMessageReceived),
+      onError: (e) => _log('❌ SERVER', 'Socket error: $e'),
       cancelOnError: false,
     );
   }
 
-  /// Stops the server and frees the port.
   Future<void> stop() async {
     await _server?.close(force: true);
     _server = null;
     _isRunning = false;
+    esp32IpNotifier.value = null;
+    _log('🔴 SERVER', 'Stopped — port $port released');
   }
 
-  /// Routes incoming requests to the correct handler.
   Future<void> _handleRequest(
     HttpRequest request,
     OnMessageReceived onMessageReceived,
   ) async {
-    // Add CORS headers so browser-based test tools (e.g. Postman web) work.
+    final from = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+    final method = request.method;
+    final path = request.uri.path;
+
+    // Track ESP32 IP — update notifier so UI shows it immediately
+    if (esp32IpNotifier.value != from) {
+      esp32IpNotifier.value = from;
+      _log('📍 ESP32 IP', 'New device seen: $from');
+    }
+
+    _log('📡 REQUEST', '$method $path  ← from $from');
+
     request.response.headers.add('Access-Control-Allow-Origin', '*');
 
-    if (request.method == 'POST' && request.uri.path == '/send-text') {
-      await _handleSendText(request, onMessageReceived);
-    } else if (request.method == 'OPTIONS') {
-      // Preflight request — respond OK
+    if (method == 'POST' && path == '/') {
+      await _handlePost(request, onMessageReceived, from);
+    } else if (method == 'OPTIONS') {
+      _log('🔄 PREFLIGHT', 'CORS preflight from $from — responded 200');
       request.response.statusCode = HttpStatus.ok;
       await request.response.close();
     } else {
-      // Any other route returns 404
+      _log('⚠️  UNKNOWN', '$method $path from $from — responded 404');
       request.response
         ..statusCode = HttpStatus.notFound
         ..write('Not found');
@@ -69,28 +91,20 @@ class HttpServerService {
     }
   }
 
-  /// Handles POST /send-text
-  ///
-  /// The ESP32 sends a plain text body, e.g.:
-  ///   POST http://192.168.1.x:3000/send-text
-  ///   Content-Type: text/plain
-  ///   Body: Hello from ESP32!
-  ///
-  /// We read the body, validate it is not empty, create a [MessageModel]
-  /// and invoke [onMessageReceived] so the UI can update via setState.
-  Future<void> _handleSendText(
+  Future<void> _handlePost(
     HttpRequest request,
     OnMessageReceived onMessageReceived,
+    String from,
   ) async {
     try {
-      // Collect all body bytes and decode as UTF-8 string
       final bodyBytes = await request.fold<List<int>>(
         [],
-        (previous, element) => previous..addAll(element),
+        (prev, chunk) => prev..addAll(chunk),
       );
       final body = utf8.decode(bodyBytes).trim();
 
       if (body.isEmpty) {
+        _log('⚠️  EMPTY', 'Empty body from $from — responded 400');
         request.response
           ..statusCode = HttpStatus.badRequest
           ..write('Body cannot be empty');
@@ -98,19 +112,21 @@ class HttpServerService {
         return;
       }
 
-      // Build the message and notify the UI
-      final message = MessageModel(
+      _log('✅ MESSAGE', 'From $from → "$body"');
+
+      onMessageReceived(MessageModel(
         text: body,
         receivedAt: DateTime.now(),
         source: 'ESP32',
-      );
-      onMessageReceived(message);
+        senderIp: from,
+      ));
 
-      // Acknowledge the ESP32
+      _log('↩️  REPLY  ', 'HTTP 200 OK → $from');
       request.response
         ..statusCode = HttpStatus.ok
         ..write('OK');
-    } catch (_) {
+    } catch (e) {
+      _log('❌ ERROR  ', 'Exception: $e');
       request.response.statusCode = HttpStatus.internalServerError;
     } finally {
       await request.response.close();
