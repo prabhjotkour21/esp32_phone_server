@@ -8,6 +8,7 @@ text messages from an ESP32 device over the same WiFi network.
 ## How to Run the Project
 
 ### Prerequisites
+
 - Flutter SDK ≥ 3.5.0 installed and on your PATH
 - An Android or iOS device (or emulator) on the same WiFi as your ESP32
 - USB debugging enabled (Android) or a provisioned simulator (iOS)
@@ -50,31 +51,31 @@ lib/
 
 ### Layer responsibilities
 
-| Layer | What it does |
-|---|---|
-| `models/` | Pure Dart data classes, no Flutter dependencies |
+| Layer       | What it does                                         |
+| ----------- | ---------------------------------------------------- |
+| `models/`   | Pure Dart data classes, no Flutter dependencies      |
 | `services/` | I/O operations (networking, server) isolated from UI |
-| `screens/` | Stateful widgets that own UI state via `setState` |
-| `widgets/` | Stateless, reusable UI building blocks |
+| `screens/`  | Stateful widgets that own UI state via `setState`    |
+| `widgets/`  | Stateless, reusable UI building blocks               |
 
 ---
 
 ## API Endpoint
 
-| Detail | Value |
-|---|---|
-| Method | `POST` |
-| Path | `/send-text` |
-| Port | `3000` |
-| Content-Type | `text/plain` |
+| Detail           | Value                   |
+| ---------------- | ----------------------- |
+| Method           | `POST`                  |
+| Path             | `/`                     |
+| Port             | `3000`                  |
+| Content-Type     | `text/plain`            |
 | Success response | `200 OK` with body `OK` |
-| Empty body | `400 Bad Request` |
-| Unknown path | `404 Not Found` |
+| Empty body       | `400 Bad Request`       |
+| Unknown path     | `404 Not Found`         |
 
 ### Example cURL command (for testing from a laptop on the same WiFi)
 
 ```bash
-curl -X POST http://<PHONE_IP>:3000/send-text \
+curl -X POST http://<PHONE_IP>:3000/ \
      -H "Content-Type: text/plain" \
      -d "Hello from cURL!"
 ```
@@ -87,7 +88,7 @@ Replace `<PHONE_IP>` with the IP shown on the Dashboard screen.
 #include <HTTPClient.h>
 
 HTTPClient http;
-http.begin("http://192.168.1.X:3000/send-text"); // use your phone's IP
+http.begin("http://192.168.1.X:3000/"); // use your phone's IP
 http.addHeader("Content-Type", "text/plain");
 int httpCode = http.POST("Sensor value: 42");
 http.end();

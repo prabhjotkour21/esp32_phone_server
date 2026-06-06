@@ -117,7 +117,7 @@ This makes the code easier to read, test, and change later.
 
   Step 3 — Routing:
     _handleRequest checks request.method and request.uri.path:
-      • POST /send-text  → calls _handleSendText
+      • POST /  → calls _handleSendText
       • OPTIONS          → responds 200 (for CORS preflight)
       • anything else    → responds 404
 
@@ -255,7 +255,7 @@ From the app's perspective, nothing changes. The ESP32 just needs to:
      clipboard and transfer it to the ESP32 firmware).
   3. Send an HTTP POST request:
 
-       POST http://<PHONE_IP>:3000/send-text HTTP/1.1
+       POST http://<PHONE_IP>:3000/ HTTP/1.1
        Content-Type: text/plain
        Content-Length: <length>
 
@@ -268,7 +268,7 @@ From the app's perspective, nothing changes. The ESP32 just needs to:
 
        const char* ssid     = "YourNetwork";
        const char* password = "YourPassword";
-       const char* serverUrl = "http://192.168.1.42:3000/send-text";
+       const char* serverUrl = "http://192.168.1.42:3000/";
 
        void setup() {
          WiFi.begin(ssid, password);
