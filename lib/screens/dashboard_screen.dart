@@ -1,25 +1,27 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../models/message_model.dart';
+import '../models/wifi_config.dart';
+import '../screens/wifi_config_screen.dart';
 import '../services/http_server_service.dart';
 import '../services/network_service.dart';
 import '../widgets/status_card.dart';
+import '../widgets/esp32_status_card.dart';
 
 /// DashboardScreen
 ///
-/// The main screen of the app. It is responsible for:
-///   1. Displaying the phone's local IP address and server port.
-///   2. Starting / stopping the HTTP server.
-///   3. Showing received messages and a running log.
+/// The main screen of the app. Responsibilities:
+///   1. Display the phone's local IP address and server port.
+///   2. Start / stop the HTTP server.
+///   3. Show received messages and a running log.
+///   4. Display the currently saved WiFi config (SSID + password status).
+///   5. Provide a settings icon that opens [WiFiConfigScreen].
 ///
 /// STATE MANAGEMENT:
-///   All state lives in [_DashboardScreenState] and is updated with
-///   setState(). There is no Provider, Riverpod, or Bloc — just plain Flutter.
-///
-/// HOW THE SERVER CALLBACK REACHES THE UI:
-///   [HttpServerService.start] accepts a callback [_onMessageReceived].
-///   When the server's listen loop fires (background async), the callback
-///   calls setState(), which schedules a rebuild on the main isolate.
+///   Plain setState() for server/message state.
+///   [wifiConfigNotifier] (ValueNotifier) drives the WiFi card so it updates
+///   the moment the user saves credentials on the WiFi Config tab.
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
 
@@ -28,21 +30,17 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ── Services ──────────────────────────────────────────────────────────────
+  // ── Services ───────────────────────────────────────────────────────────────
   final _serverService = HttpServerService();
 
-  // ── State fields ──────────────────────────────────────────────────────────
-  String _localIp = 'Fetching...';
+  // ── State ──────────────────────────────────────────────────────────────────
+  String _localIp = 'Fetching…';
   bool _serverRunning = false;
   String? _errorMessage;
-
-  /// The most recently received message (shown prominently at the top).
   MessageModel? _lastMessage;
-
-  /// All messages received since the app was opened (newest first).
   final List<MessageModel> _messageLog = [];
 
-  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
@@ -52,29 +50,23 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   void dispose() {
-    // Always stop the server when the widget is removed to free the port.
     _serverService.stop();
     super.dispose();
   }
 
-  // ── Helpers ───────────────────────────────────────────────────────────────
+  // ── Helpers ────────────────────────────────────────────────────────────────
 
   Future<void> _fetchIpAddress() async {
     final ip = await NetworkService.getLocalIpAddress();
     if (mounted) {
-      setState(() {
-        _localIp = ip ?? 'Not connected to WiFi';
-      });
+      setState(() => _localIp = ip ?? 'Not connected to WiFi');
     }
   }
 
-  /// Called by the HTTP server (on the main isolate via setState) whenever
-  /// a valid POST /send-text request arrives.
   void _onMessageReceived(MessageModel message) {
-    // setState guarantees the UI rebuilds with the new message.
     setState(() {
       _lastMessage = message;
-      _messageLog.insert(0, message); // newest first
+      _messageLog.insert(0, message);
     });
   }
 
@@ -83,7 +75,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     try {
       await _serverService.start(_onMessageReceived);
       setState(() => _serverRunning = true);
+    } on SocketException catch (e) {
+      final msg = 'Socket error: ${e.message} (port ${HttpServerService.port})';
+      // ignore: avoid_print
+      print('[ERROR] $msg');
+      setState(() => _errorMessage = msg);
     } on Exception catch (e) {
+      // ignore: avoid_print
+      print('[ERROR] Failed to start server: $e');
       setState(() => _errorMessage = 'Failed to start server: $e');
     }
   }
@@ -93,16 +92,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     setState(() => _serverRunning = false);
   }
 
-  /// Simulates a message from the ESP32 — useful for testing the UI
-  /// without needing real hardware.
   void _simulateMessage() {
-    _onMessageReceived(
-      MessageModel(
-        text: 'Hello from simulated ESP32! 🤖',
-        receivedAt: DateTime.now(),
-        source: 'Simulated',
-      ),
-    );
+    _onMessageReceived(MessageModel(
+      text: 'Hello from simulated ESP32! 🤖',
+      receivedAt: DateTime.now(),
+      source: 'Simulated',
+    ));
   }
 
   void _copyToClipboard(String text) {
@@ -122,7 +117,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     });
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  /// Opens [WiFiConfigScreen] as a push route (from the settings icon).
+  /// Using push instead of switching the bottom-nav tab keeps it accessible
+  /// from the AppBar regardless of which tab is active.
+  void _openWifiConfig() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const WiFiConfigScreen()),
+    );
+  }
+
+  // ── Build ──────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -131,29 +136,53 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: const Text('ESP32 Phone Server'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
         actions: [
-          // Clear log button
           if (_messageLog.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep),
               tooltip: 'Clear message log',
               onPressed: _clearLog,
             ),
-          // Refresh IP button
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh IP address',
             onPressed: _fetchIpAddress,
+          ),
+          // ── Settings / WiFi Config shortcut ──────────────────────────────
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            tooltip: 'WiFi Configuration',
+            onPressed: _openWifiConfig,
           ),
         ],
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // ── Status card ──────────────────────────────────────────────────
+          // ── Server status card ─────────────────────────────────────────
           StatusCard(isRunning: _serverRunning),
           const SizedBox(height: 12),
 
-          // ── Network info ─────────────────────────────────────────────────
+          // ── WiFi Config summary card ─────────────────────────────────
+          ValueListenableBuilder<WifiConfig>(
+            valueListenable: wifiConfigNotifier,
+            builder: (_, config, __) => _WifiConfigCard(
+              config: config,
+              onEdit: _openWifiConfig,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── ESP32 live connection status ──────────────────────────────
+          ValueListenableBuilder<String?>(
+            valueListenable: esp32IpNotifier,
+            builder: (_, ip, __) => Esp32StatusCard(
+              esp32Ip: ip,
+              serverRunning: _serverRunning,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Network info ───────────────────────────────────────────────
           _SectionCard(
             title: 'Network Info',
             child: Column(
@@ -171,17 +200,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   icon: Icons.router,
                   label: 'Server Port',
                   value: '${HttpServerService.port}',
-                  onCopy: () =>
-                      _copyToClipboard('${HttpServerService.port}'),
+                  onCopy: () => _copyToClipboard('${HttpServerService.port}'),
                 ),
                 const Divider(height: 1),
                 _InfoTile(
                   icon: Icons.link,
                   label: 'Endpoint',
-                  value: 'POST /send-text',
+                  value: 'POST /',
                   onCopy: _localIp.contains('.')
                       ? () => _copyToClipboard(
-                          'http://$_localIp:${HttpServerService.port}/send-text')
+                          'http://$_localIp:${HttpServerService.port}/')
                       : null,
                 ),
               ],
@@ -189,7 +217,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ── Error message ─────────────────────────────────────────────────
+          // ── Error message ──────────────────────────────────────────────
           if (_errorMessage != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 12),
@@ -207,7 +235,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-          // ── Server controls ───────────────────────────────────────────────
+          // ── Server controls ────────────────────────────────────────────
           _SectionCard(
             title: 'Server Controls',
             child: Column(
@@ -237,7 +265,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 const SizedBox(height: 12),
                 const Divider(),
                 const SizedBox(height: 8),
-                // Testing helper button — simulates a message from the ESP32
                 OutlinedButton.icon(
                   onPressed: _simulateMessage,
                   icon: const Icon(Icons.developer_mode),
@@ -251,7 +278,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ── Last received message ─────────────────────────────────────────
+          // ── Last received message ──────────────────────────────────────
           _SectionCard(
             title: 'Last Received Message',
             child: _lastMessage == null
@@ -269,7 +296,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
 
-          // ── Message log ───────────────────────────────────────────────────
+          // ── Message log ────────────────────────────────────────────────
           _SectionCard(
             title: 'Message Log (${_messageLog.length})',
             child: _messageLog.isEmpty
@@ -283,20 +310,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                   )
                 : ListView.separated(
-                    // Nested ListView inside a scrollable parent requires
-                    // shrinkWrap + NeverScrollableScrollPhysics
                     shrinkWrap: true,
                     physics: const NeverScrollableScrollPhysics(),
                     itemCount: _messageLog.length,
                     separatorBuilder: (_, __) => const Divider(height: 1),
-                    itemBuilder: (_, index) =>
-                        _MessageTile(message: _messageLog[index]),
+                    itemBuilder: (_, i) =>
+                        _MessageTile(message: _messageLog[i]),
                   ),
           ),
-
           const SizedBox(height: 24),
 
-          // ── Quick reference for ESP32 developers ─────────────────────────
+          // ── ESP32 quick reference ──────────────────────────────────────
           _SectionCard(
             title: 'ESP32 Quick Reference',
             child: Padding(
@@ -318,7 +342,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     ),
                     child: Text(
                       'HTTPClient http;\n'
-                      'http.begin("http://$_localIp:${HttpServerService.port}/send-text");\n'
+                      'http.begin("http://$_localIp:${HttpServerService.port}/");\n'
                       'http.addHeader("Content-Type", "text/plain");\n'
                       'int code = http.POST("Hello from ESP32!");\n'
                       'http.end();',
@@ -333,19 +357,153 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 24),
         ],
       ),
     );
   }
 }
 
-// ── Private helper widgets ────────────────────────────────────────────────────
+// ── WiFi Config Card ──────────────────────────────────────────────────────────
 
-/// A card with a title and arbitrary child content.
+/// Shows the currently saved WiFi credentials on the Dashboard.
+/// Rebuilds automatically via [ValueListenableBuilder] whenever the user
+/// saves new credentials on the WiFi Config screen.
+class _WifiConfigCard extends StatelessWidget {
+  final WifiConfig config;
+  final VoidCallback onEdit;
+
+  const _WifiConfigCard({required this.config, required this.onEdit});
+
+  @override
+  Widget build(BuildContext context) {
+    final configured = config.isComplete;
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(
+          color: configured ? Colors.green.shade200 : Colors.orange.shade200,
+          width: 1,
+        ),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  configured ? Icons.wifi : Icons.wifi_off,
+                  size: 18,
+                  color: configured
+                      ? Colors.green.shade600
+                      : Colors.orange.shade700,
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  'WiFi Configuration',
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                        fontWeight: FontWeight.bold,
+                      ),
+                ),
+                const Spacer(),
+                TextButton.icon(
+                  onPressed: onEdit,
+                  icon: const Icon(Icons.edit_outlined, size: 16),
+                  label: Text(configured ? 'Edit' : 'Configure'),
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (configured) ...[
+              _ConfigRow(
+                icon: Icons.wifi,
+                label: 'SSID',
+                value: config.ssid,
+              ),
+              const SizedBox(height: 4),
+              _ConfigRow(
+                icon: Icons.lock_outline,
+                label: 'Password',
+                value: config.hasPassword ? 'Configured ✓' : 'Not set',
+                valueColor:
+                    config.hasPassword ? Colors.green.shade700 : Colors.red,
+              ),
+            ] else
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning_amber_outlined,
+                        size: 16, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    Text(
+                      'No WiFi credentials configured yet.',
+                      style: TextStyle(
+                          fontSize: 13, color: Colors.orange.shade800),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ConfigRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? valueColor;
+
+  const _ConfigRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    this.valueColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 15, color: Colors.grey.shade600),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 72,
+          child: Text(label,
+              style:
+                  const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: TextStyle(
+              fontSize: 13,
+              fontFamily: 'monospace',
+              color: valueColor,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Reusable section widgets ──────────────────────────────────────────────────
+
 class _SectionCard extends StatelessWidget {
   final String title;
   final Widget child;
-
   const _SectionCard({required this.title, required this.child});
 
   @override
@@ -357,13 +515,11 @@ class _SectionCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: Theme.of(context)
-                  .textTheme
-                  .titleSmall
-                  ?.copyWith(fontWeight: FontWeight.bold),
-            ),
+            Text(title,
+                style: Theme.of(context)
+                    .textTheme
+                    .titleSmall
+                    ?.copyWith(fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             child,
           ],
@@ -373,7 +529,6 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-/// A row showing an icon, label, value, and optional copy button.
 class _InfoTile extends StatelessWidget {
   final IconData icon;
   final String label;
@@ -397,17 +552,13 @@ class _InfoTile extends StatelessWidget {
           const SizedBox(width: 8),
           SizedBox(
             width: 90,
-            child: Text(
-              label,
-              style: const TextStyle(
-                  fontWeight: FontWeight.w600, fontSize: 13),
-            ),
+            child: Text(label,
+                style:
+                    const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
           ),
           Expanded(
-            child: Text(
-              value,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-            ),
+            child: Text(value,
+                style: const TextStyle(fontFamily: 'monospace', fontSize: 13)),
           ),
           if (onCopy != null)
             IconButton(
@@ -423,33 +574,25 @@ class _InfoTile extends StatelessWidget {
   }
 }
 
-/// Displays a single [MessageModel] in the log list.
 class _MessageTile extends StatelessWidget {
   final MessageModel message;
-
-  /// When true, renders with a slightly highlighted background (used for the
-  /// "last message" section).
   final bool highlight;
-
   const _MessageTile({required this.message, this.highlight = false});
 
   @override
   Widget build(BuildContext context) {
     final isSimulated = message.source == 'Simulated';
-
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       color: highlight ? Colors.blue.shade50 : null,
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Source badge
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
             decoration: BoxDecoration(
-              color: isSimulated
-                  ? Colors.orange.shade100
-                  : Colors.green.shade100,
+              color:
+                  isSimulated ? Colors.orange.shade100 : Colors.green.shade100,
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
@@ -468,10 +611,7 @@ class _MessageTile extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  message.text,
-                  style: const TextStyle(fontSize: 14),
-                ),
+                Text(message.text, style: const TextStyle(fontSize: 14)),
                 const SizedBox(height: 2),
                 Text(
                   message.formattedTime,
