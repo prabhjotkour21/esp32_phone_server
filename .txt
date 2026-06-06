@@ -1,0 +1,146 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <HTTPClient.h>
+#include <WiFiManager.h>
+#include <Preferences.h> // Library to save custom parameters permanently
+
+// Pin definitions
+const int RESET_BUTTON_PIN = 0; // GPIO 0 (often the 'Boot' button on ESP32-C3 development boards)
+
+// Variables to hold our custom HTTP server parameters
+char target_ip[40] = ""; 
+char target_port[6] = "";
+
+unsigned long lastTime = 0;
+unsigned long timerDelay = 5000; 
+int messageCount = 0;            
+
+Preferences preferences;
+
+void checkResetButton() {
+  // Check if button is pressed (GPIO 0 reads LOW when pressed)
+  if (digitalRead(RESET_BUTTON_PIN) == LOW) {
+    Serial.println("\n!!! Reset button pressed !!!");
+    Serial.println("Erasing Wi-Fi credentials and saved server configuration...");
+    
+    // 1. Clear WiFiManager network settings
+    WiFiManager wm;
+    wm.resetSettings();
+    
+    // 2. Clear our custom IP/Port settings from Preferences
+    preferences.begin("server-conf", false);
+    preferences.clear();
+    preferences.end();
+    
+    Serial.println("Erase complete. Restarting ESP32-C3...");
+    delay(1500);
+    ESP.restart(); // Reboot into Captive Portal mode
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n--- Starting ESP32-C3 with WiFiManager ---");
+
+  // Configure GPIO 0 as input with internal pull-up resistor
+  pinMode(RESET_BUTTON_PIN, INPUT_PULLUP);
+
+  // Load custom parameters from permanent storage (Preferences)
+  preferences.begin("server-conf", false);
+  String saved_ip = preferences.getString("ip", "192.168.1.50"); // Default fallback
+  String saved_port = preferences.getString("port", "8080");     // Default fallback
+  strcpy(target_ip, saved_ip.c_str());
+  strcpy(target_port, saved_port.c_str());
+  preferences.end();
+
+  // Initialize WiFiManager
+  WiFiManager wm;
+
+  // Define custom input fields for IP and Port in the Captive Portal
+  WiFiManagerParameter custom_ip_param("server_ip", "Target Server IP", target_ip, 40);
+  WiFiManagerParameter custom_port_param("server_port", "Target Server Port", target_port, 6);
+
+  wm.addParameter(&custom_ip_param);
+  wm.addParameter(&custom_port_param);
+
+  // Automatically connect or launch portal if no valid Wi-Fi credentials exist
+  bool success = wm.autoConnect("ESP32C3_Auto_AP", "Password123");
+
+  if (!success) {
+    Serial.println("Failed to connect or hit timeout. Restarting...");
+    delay(3000);
+    ESP.restart();
+  }
+
+  Serial.println("\nSuccessfully Connected to Wi-Fi!");
+  
+  // Read updated values from the configuration portal
+  strcpy(target_ip, custom_ip_param.getValue());
+  strcpy(target_port, custom_port_param.getValue());
+
+  // Save the newly submitted values permanently to Preferences
+  preferences.begin("server-conf", false);
+  preferences.putString("ip", String(target_ip));
+  preferences.putString("port", String(target_port));
+  preferences.end();
+
+  Serial.println("--- Configured Server Details ---");
+  Serial.print("Target Server IP: ");
+  Serial.println(target_ip);
+  Serial.print("Target Server Port: ");
+  Serial.println(target_port);
+  Serial.println("---------------------------------");
+}
+
+void loop() {
+  // Constantly check if the user is pressing the button to wipe settings
+  checkResetButton();
+
+  // Send data every 5 seconds
+  if ((millis() - lastTime) > timerDelay) {
+    if (WiFi.status() == WL_CONNECTED) {
+      
+      String url = "http://" + String(target_ip) + ":" + String(target_port) + "/";
+      
+      HTTPClient http;
+      http.begin(url);
+      http.addHeader("Content-Type", "text/plain");
+
+      String payload = "hello from esp32c3, Count: " + String(messageCount);
+      
+      Serial.print("[" + String(millis()) + "] Sending: ");
+      Serial.println(payload);
+
+      int httpResponseCode = http.POST(payload);
+
+      if (httpResponseCode > 0) {
+        Serial.print("HTTP Response code: ");
+        Serial.println(httpResponseCode);
+      } else {
+        Serial.print("Error sending POST. Error code: ");
+        Serial.println(httpResponseCode);
+      }
+
+      http.end(); 
+      messageCount++; 
+    } else {
+      Serial.println("Wi-Fi disconnected. Skipping transmission...");
+    }
+
+    lastTime = millis(); 
+  }
+}
+
+
+
+
+
+1. App mein → WiFi Config tab → purple card mein Phone IP copy karo
+2. ESP32 power on karo
+3. Phone se "ESP32C3_Auto_AP" se connect karo (Password: Password123)
+4. Browser: 192.168.4.1
+5. Portal mein IP + 3000 paste karo + apna WiFi credentials
+6. Save → apna WiFi wapas connect karo
+7. Dashboard → Start Server
+8. VS Code terminal mein ✅ MESSAGE print hoga!
