@@ -1,5 +1,14 @@
 import 'dart:io';
 
+/// Simple terminal logger (shared across services)
+void logInfo(String tag, String msg) {
+  final t = DateTime.now();
+  final time =
+      '${t.hour.toString().padLeft(2,'0')}:${t.minute.toString().padLeft(2,'0')}:${t.second.toString().padLeft(2,'0')}';
+  // ignore: avoid_print
+  print('[$time] $tag $msg');
+}
+
 /// Fetches network information about the current device.
 /// Uses dart:io — no external packages needed.
 class NetworkService {
@@ -21,14 +30,16 @@ class NetworkService {
 
       for (final interface in interfaces) {
         for (final addr in interface.addresses) {
-          // Skip loopback addresses (127.x.x.x)
           if (!addr.isLoopback) {
+            logInfo('📶 NETWORK', 'Phone IP detected: ${addr.address}  (interface: ${interface.name})');
             return addr.address;
           }
         }
       }
+      logInfo('⚠️  NETWORK', 'No WiFi IP found — is the phone connected to WiFi?');
       return null;
-    } catch (_) {
+    } catch (e) {
+      logInfo('❌ NETWORK', 'Error fetching IP: $e');
       return null;
     }
   }
