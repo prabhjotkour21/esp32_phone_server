@@ -20,7 +20,7 @@ void _log(String tag, String msg) {
 /// Holds the last seen ESP32 IP address.
 /// Updated on every incoming POST so DashboardScreen can show it live
 /// via ValueListenableBuilder without any extra state-management library.
-final esp32IpNotifier = ValueNotifier<String?>( null);
+final esp32IpNotifier = ValueNotifier<String?>(null);
 
 // ─────────────────────────────────────────────────────────────────────────────
 
